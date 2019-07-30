@@ -1,0 +1,103 @@
+---
+title: "Get BLS Area Data"
+author: "Jethro Torczon"
+date: "7/27/2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(stringr)
+library(readr)
+library(purrr)
+library(readxl) # read_excel()
+library(dplyr)
+library(data.table)
+library(filesstrings) # file.move()
+
+data_dir <- "~/Dropbox/relocation/BLS_area_data"
+
+
+```
+
+## Introduction
+
+This is a script to scrape data from the following link format:
+  https://www.bls.gov/oes/special.requests/oesm03ma.zip
+  
+Separate the corresponding link for each year like this for iteration: "oesm" + years + "ma.zip"
+
+
+```{r}
+years <- 3:18
+yrs_pad <- str_pad(years, 2, side=c("left"), pad = "0")
+yrs_pad
+link_by_year <- paste0("https://www.bls.gov/oes/special.requests/oesm", yrs_pad, "ma.zip")
+```
+
+Set the working directory in your computer, then download and unzip each year's corresponding folder with a for loop:
+
+```{r}
+destination_location <- paste0(data_dir, '/', basename(URL))
+
+for (URL in link_by_year)  {
+  download.file(url = URL, destfile = destination_location)
+  unzip(destination_location)
+}
+```
+
+In 2014, BLS switched to xlsX files, and began saving them in folders within the zip files for each year posted online.
+1. MOVE the xlsX files from the 2014-2018 subdirectories into your working directory.
+2. COMBINE the two vectors for XLS and xlsX data file names into a single vector
+3. EXCLUDE the file and field description documents for both XLS and XLSX formats
+
+```{r}
+xlsX_files <- list.files(pattern = "xlsx", full.names = FALSE, recursive = TRUE) # recursively accesses all 5 subdirectories
+file.move(xlsX_files, data_dir)
+
+xlsX_files <- list.files(pattern = "xlsx", full.names = FALSE, recursive = FALSE) # ignores the 8 redundant xlsX description files
+XLS_files <- list.files(pattern = "xls$", recursive = TRUE)
+#  print(xlsX_files)
+
+files <- c(XLS_files, xlsX_files)
+#  print(files)
+ignore <- c("file_descriptions.xls", "field_descriptions.xls", "file_descriptions.xlsx", "field_descriptions.xlsx")
+files <- files[!files %in% ignore]   # overwrites the list of all files to now exclude the four descriptions files
+  print(files)
+```
+
+Create a new vector that extracts the year from all 63 data files in the exact same corresponding order:
+
+```{r}
+extract_file_Years <-  str_extract(files, "20..")
+extract_file_Years
+## NOTE that 3 files {MSA_dl_1.xls, MSA_dl_2.xls, MSA_dl_3.xls} don't list the year
+# 2009 was the only year missing from the entire printed list of MSA file names
+# deleting them all and running just "unzip("oesm09ma.zip")" confirmed that these 3 are from 2009
+## ALSO NOTE that the *2009 BOS and aMSA file names actually both include the year already*
+
+file_Years_no_NA <- extract_file_Years
+file_Years_no_NA[is.na(file_Years_no_NA)] <- 2009
+# file_Years_no_NA
+```
+
+1. Use "map()" to read all 63 Excel files and include each as an element in a "large list" called "BLSdata"
+2. Then use "rbindlist()" to combine them all into a single comprehensive data.table called "Data_Merged"
+
+```{r}
+BLSdata <- map(files, read_excel)
+
+names(BLSdata) <- file_Years_no_NA
+# attributes(BLSdata)
+
+# Data sanity check
+table_names <- unlist(lapply(l , names))
+dt_sanity_check <- table(table_names)
+
+Data_Merged <- rbindlist(BLSdata, fill = TRUE, use.names = TRUE, idcol = "YEAR")   #"idcol" adds a column showing which list item each row came from
+
+saveRDS(Data_Merged, paste0(data_dir, '/Clean/BLS_data.rds'))
+```
+
+The final resulting data.table should have 3,168,495 observations (rows) of 27 variables (columns), with an ID column that shows the year to which each row corresponds.
